@@ -141,12 +141,48 @@ export default function UploadWizard() {
         }
     };
 
-    const handleUploadDocker = async (formData) => {
-        const res = await fetch(`${API_URL}/containers/${selectedContainer}/databases/${selectedDatabase}/import`, {
-            method: 'POST',
-            body: formData
+    const [dropData, setDropData] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(0);
+
+    const performXHRUpload = (url, formData) => {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+
+            xhr.upload.addEventListener('progress', (e) => {
+                if (e.lengthComputable) {
+                    const percentComplete = Math.round((e.loaded / e.total) * 100);
+                    setUploadProgress(percentComplete);
+                }
+            });
+
+            xhr.addEventListener('load', () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try {
+                        resolve(JSON.parse(xhr.responseText));
+                    } catch (e) {
+                        resolve({ success: true });
+                    }
+                } else {
+                    try {
+                        const errData = JSON.parse(xhr.responseText);
+                        reject(new Error(errData.error || `Upload failed with status ${xhr.status}`));
+                    } catch (e) {
+                        reject(new Error(`Upload failed with status ${xhr.status}`));
+                    }
+                }
+            });
+
+            xhr.addEventListener('error', () => {
+                reject(new Error('Network error occurred during upload.'));
+            });
+
+            xhr.open('POST', url, true);
+            xhr.send(formData);
         });
-        return res;
+    };
+
+    const handleUploadDocker = async (formData) => {
+        return performXHRUpload(`${API_URL}/containers/${selectedContainer}/databases/${selectedDatabase}/import`, formData);
     };
 
     const handleUploadManual = async (formData) => {
@@ -156,11 +192,7 @@ export default function UploadWizard() {
         formData.append('password', manualPassword);
         formData.append('database', manualDatabase);
 
-        const res = await fetch(`${API_URL}/universal/import`, {
-            method: 'POST',
-            body: formData
-        });
-        return res;
+        return performXHRUpload(`${API_URL}/universal/import`, formData);
     };
 
     const handleUpload = async () => {
@@ -168,28 +200,72 @@ export default function UploadWizard() {
         if (activeTab === 'docker' && (!selectedContainer || !selectedDatabase)) return;
         if (activeTab === 'manual' && !manualDatabase) return;
 
+        let effectiveDropData = dropData;
+
+        if (!effectiveDropData) {
+            setUploading(true);
+            setStatus({ type: '', message: 'Verificando destino...' });
+            try {
+                let hasTables = false;
+                if (activeTab === 'docker') {
+                    const res = await fetch(`${API_URL}/containers/${selectedContainer}/databases/${selectedDatabase}/tables/check`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        hasTables = data.hasTables;
+                    }
+                } else {
+                    const res = await fetch(`${API_URL}/universal/tables/check`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ host: manualHost, port: manualPort, user: manualUser, password: manualPassword, database: manualDatabase })
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        hasTables = data.hasTables;
+                    }
+                }
+
+                if (hasTables) {
+                    setUploading(false); // Quick visual fix before prompt
+                    const confirmDrop = window.confirm("Existem tabelas cadastradas neste banco de dados.\n\nDeseja apagar TODOS os registros antigos antes de importar?\nSe clicar em OK, o banco será limpado. Se Cancelar, o processo será abortado com segurança.");
+                    if (confirmDrop) {
+                        setDropData(true);
+                        effectiveDropData = true;
+                    } else {
+                        setStatus({ type: '', message: 'Importação cancelada pelo usuário (Proteção contra colisão).' });
+                        return;
+                    }
+                }
+            } catch (err) {
+                console.warn('Aviso: Não foi possível checar as tabelas previamente.', err);
+            }
+        }
+
         setUploading(true);
+        setUploadProgress(0);
         setStatus({ type: '', message: '' });
 
         const formData = new FormData();
+        // The order is extremely important for busboy! Fields must come before files.
+        formData.append('dropData', effectiveDropData ? 'true' : 'false');
         formData.append('file', file);
 
         try {
             const startTime = Date.now();
-            let res;
+            let data;
 
             if (activeTab === 'docker') {
-                res = await handleUploadDocker(formData);
+                data = await handleUploadDocker(formData);
             } else {
-                res = await handleUploadManual(formData);
+                data = await handleUploadManual(formData);
             }
 
-            const data = await res.json();
             const elapsed = Math.round((Date.now() - startTime) / 1000);
 
-            if (res.ok && data.success) {
+            if (data.success) {
                 setStatus({ type: 'success', message: `Importação concluída com sucesso em ${elapsed}s!` });
                 setFile(null);
+                setUploadProgress(100);
             } else {
                 setStatus({ type: 'error', message: data.error || 'Upload failed' });
             }
@@ -198,6 +274,7 @@ export default function UploadWizard() {
         }
         setUploading(false);
     };
+
 
     return (
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -315,6 +392,20 @@ export default function UploadWizard() {
 
             {(activeTab === 'docker' && selectedDatabase) || (activeTab === 'manual' && manualDatabase) ? (
                 <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '0 0.5rem' }}>
+                        <input
+                            type="checkbox"
+                            id="dropData"
+                            checked={dropData}
+                            onChange={(e) => setDropData(e.target.checked)}
+                            disabled={uploading}
+                            style={{ width: '1.2rem', height: '1.2rem', cursor: 'pointer' }}
+                        />
+                        <label htmlFor="dropData" style={{ margin: 0, cursor: 'pointer', color: 'var(--accent-color)' }}>
+                            Apagar dados antigos da base (Drop Tables) antes de importar?
+                        </label>
+                    </div>
+
                     <div
                         className={`dropzone ${file ? 'active' : ''}`}
                         onDragOver={e => e.preventDefault()}
@@ -353,12 +444,25 @@ export default function UploadWizard() {
 
             {uploading && (
                 <div className="progress-container" style={{ marginTop: 0 }}>
-                    <div className="progress-bar-bg">
-                        <div className="progress-bar-fill streaming"></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--accent-color)' }}>
+                        <span>Status: Enviando Dados para o Banco</span>
+                        <span style={{ fontWeight: 'bold' }}>{uploadProgress}%</span>
                     </div>
-                    <p style={{ textAlign: 'center', marginTop: '1rem', color: 'var(--accent-color)' }}>
-                        Processando fluxo contínuo de dados em tempo real...
-                    </p>
+                    <div className="progress-bar-bg">
+                        <div
+                            className={`progress-bar-fill ${uploadProgress === 100 ? '' : 'streaming'}`}
+                            style={{ width: `${uploadProgress}%`, minWidth: '5%' }}
+                        ></div>
+                    </div>
+                    {uploadProgress === 100 ? (
+                        <p style={{ textAlign: 'center', marginTop: '1rem', color: 'var(--accent-color)', fontSize: '0.9rem' }}>
+                            Transferência completa. O servidor está importando e finalizando a conexão...
+                        </p>
+                    ) : (
+                        <p style={{ textAlign: 'center', marginTop: '1rem', color: 'var(--accent-color)', fontSize: '0.9rem' }}>
+                            Streaming em progresso ({uploadProgress}%)
+                        </p>
+                    )}
                 </div>
             )}
 

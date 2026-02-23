@@ -1,7 +1,9 @@
 const { exec } = require('child_process');
 
+const winPrefix = process.platform === 'win32' ? 'chcp 65001 >NUL & ' : '';
+
 exports.getContainers = (req, res) => {
-    exec('docker ps --format \'{{json .}}\'', (error, stdout, stderr) => {
+    exec(`${winPrefix}docker ps --format '{{json .}}'`, (error, stdout, stderr) => {
         if (error) {
             return res.status(500).json({ error: error.message });
         }
@@ -14,7 +16,7 @@ exports.getContainers = (req, res) => {
 
 exports.getDatabases = (req, res) => {
     const { container } = req.params;
-    exec(`docker exec ${container} mysql -e "SHOW DATABASES;"`, (error, stdout, stderr) => {
+    exec(`${winPrefix}docker exec ${container} mysql -e "SHOW DATABASES;"`, (error, stdout, stderr) => {
         if (error) {
             return res.status(500).json({ error: stderr || error.message });
         }
@@ -28,7 +30,7 @@ exports.createDatabase = (req, res) => {
     const { database } = req.body;
     if (!database) return res.status(400).json({ error: 'Database name required' });
 
-    exec(`docker exec ${container} mysql -e "CREATE DATABASE IF NOT EXISTS \\\`${database}\\\`;"`, (error, stdout, stderr) => {
+    exec(`${winPrefix}docker exec ${container} mysql -e "CREATE DATABASE IF NOT EXISTS \\\`${database}\\\`;"`, (error, stdout, stderr) => {
         if (error) return res.status(500).json({ error: stderr || error.message });
         res.json({ success: true, database });
     });
