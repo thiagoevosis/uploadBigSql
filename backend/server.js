@@ -12,12 +12,15 @@ app.use(express.json());
 app.get('/api/containers', dockerController.getContainers);
 app.get('/api/containers/:container/databases', dockerController.getDatabases);
 app.post('/api/containers/:container/databases', dockerController.createDatabase);
+app.get('/api/containers/:container/databases/:database/tables/check', uploadController.checkTablesDockerRoute);
 app.post('/api/containers/:container/databases/:database/import', uploadController.uploadSql);
 
 const universalUploadController = require('./controllers/universalUploadController');
 app.post('/api/universal/test-connection', universalUploadController.testDirectConnection);
 app.post('/api/universal/create-database', universalUploadController.createDirectDatabase);
+app.post('/api/universal/tables/check', universalUploadController.checkTablesDirectRoute);
 app.post('/api/universal/import', universalUploadController.uploadDirect);
+
 
 app.listen(port, () => {
     console.log(`UploadSql backend listening on port ${port}`);
